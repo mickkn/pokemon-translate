@@ -1,0 +1,1 @@
+Trying to automate translation of Pokemon Red and Blue.
