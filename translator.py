@@ -1,9 +1,9 @@
-from enum import StrEnum
-import deepl
-import googletrans
-import os
-from deep_translator import GoogleTranslator
 import re
+from enum import StrEnum
+from pprint import pprint
+
+from deep_translator import GoogleTranslator
+
 
 class Language(StrEnum):
 
@@ -26,42 +26,62 @@ class PokemonTranslate(object):
         """
         return self.translator.translate(text)
 
-    def extract_text_blocks(self, file_content: str) -> dict:
-        """Extracts and groups text blocks from the asm file."""
-        pattern = re.compile(r'(\w+::)\s*([\s\S]+?)(?=\w+::|\Z)', re.MULTILINE)
+    def extract_blocks_with_structure(self, file_content):
+        """Extracts blocks including the entire structure (text lines, tabs, empty lines)."""
+        print(repr(file_content))
+
+        # Adjusted regex to match label and keep content without leading newlines
+        pattern = re.compile(r'(\w+::)\n([\s\S]+?)(?=\w+::|\Z)', re.MULTILINE)
+
         matches = pattern.findall(file_content)
+
+        pprint(matches)  # Check the matches to ensure tabs and structure are preserved
 
         blocks = {}
         for label, content in matches:
-            lines = re.findall(r'(text|line|para|cont)\s+"([^"]+)"', content)
+            print(repr(content))  # Print the content to inspect the structure
+            lines = content.splitlines(keepends=True)  # Keep original newlines and tabs
             blocks[label] = lines
+
+        # pprint(blocks)
         return blocks
 
-    def concatenate_text(self, blocks):
-        """Concatenate text from each block for translation."""
-        combined_blocks = {}
+    def extract_text_for_translation(self, blocks):
+        """Extracts only the text lines for translation, ignoring 'done', 'prompt'."""
+        text_blocks = {}
         for label, lines in blocks.items():
-            full_text = " ".join([text for _, text in lines])
-            combined_blocks[label] = full_text
-        return combined_blocks
+            text_lines = []
+            for line in lines:
+                match = re.search(r'(text|line|para|cont)\s+"([^"]+)"', line)
+                if match:
+                    text_lines.append(match.group(2))
+            text_blocks[label] = " ".join(text_lines)
+        return text_blocks
 
-    def reformat_translated_blocks(self, translated_blocks, original_blocks):
-        """Reformats the translated text back into the original format."""
-        reformatted_blocks = {}
-        for label, translated_text in translated_blocks.items():
-            original_lines = original_blocks[label]
-            # Break translated_text into chunks based on original line count
-            translated_lines = translated_text.split()  # Adjust splitting logic as needed
-            reformatted_content = []
+    def reassemble_blocks_with_translated_text(self, translated_text_blocks, original_blocks):
+        """Replaces the text lines with translated ones, keeping the rest of the structure."""
+        reassembled_blocks = {}
+
+        for label, original_lines in original_blocks.items():
+            translated_text = translated_text_blocks[label].split()
+            reassembled_lines = []
             idx = 0
-            for original_line in original_lines:
-                keyword, _ = original_line
-                length = len(_)
-                reformatted_content.append(f'{keyword} "{translated_lines[idx:idx + length]}"')
-                idx += length
-            reformatted_blocks[label] = "\n".join(reformatted_content)
-        return reformatted_blocks
-
+            for line in original_lines:
+                match = re.search(r'(text|line|para|cont)\s+"([^"]+)"', line)
+                if match:
+                    # Extract the original line's length and replace it with the translated text
+                    original_text = match.group(2)
+                    length = len(original_text.split())
+                    new_text = " ".join(translated_text[idx:idx + length])
+                    # Preserve leading whitespace (tabs) in the original line
+                    leading_whitespace = line[:line.find(match.group(1))]
+                    reassembled_lines.append(f'{leading_whitespace}{match.group(1)} "{new_text}"\n')
+                    idx += length
+                else:
+                    # For lines that don't need translation, retain them as they are (including empty lines)
+                    reassembled_lines.append(line)
+            reassembled_blocks[label] = "".join(reassembled_lines)  # Join lines with their original newlines
+        return reassembled_blocks
 
 
 if __name__ == '__main__':
@@ -72,16 +92,16 @@ if __name__ == '__main__':
 
     # Extract text blocks
     translator = PokemonTranslate("pokemon.asm", "da")
-    blocks = translator.extract_text_blocks(file_content)
+    blocks = translator.extract_blocks_with_structure(file_content)
 
     # Concatenate text from each block for translation
-    combined_blocks = translator.concatenate_text(blocks)
+    combined_blocks = translator.extract_text_for_translation(blocks)
 
     # Translate the text
     translated_blocks = {label: translator.translate(text) for label, text in combined_blocks.items()}
 
     # Reformat the translated text back into the original format
-    reformatted_blocks = translator.reformat_translated_blocks(translated_blocks, blocks)
+    reformatted_blocks = translator.reassemble_blocks_with_translated_text(translated_blocks, blocks)
 
     # Write the translated text back to the asm file
     with open("test_da.asm", "w") as f:
